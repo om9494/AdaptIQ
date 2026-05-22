@@ -1,0 +1,46 @@
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+**/.env
+!**/.env.example
+
+# Node / frontend artifacts
+node_modules/
+dist/
+build/
+.vite/
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+
+# Virtual environments
+.venv/
+venv/
+env/
+backend/venv/
+
+# Runtime folders
+backend/uploads/
+backend/eduadapt-ai/learning_report.html
+instance/
+
+# Logs
+*.log
+*.err
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/

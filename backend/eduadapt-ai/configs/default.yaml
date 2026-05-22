@@ -1,0 +1,61 @@
+knowledge_tracing:
+  sequence_length: 10
+  hidden_size: 128
+  learning_rate: 0.001
+  forgetting_rate: 0.05
+  knowledge_decay: 0.02
+
+content_recommendation:
+  relevance_weight: 0.5
+  style_match_weight: 0.3
+  difficulty_weight: 0.1
+  engagement_weight: 0.1
+  content_types:
+    - text
+    - video
+    - audio
+    - interactive
+    - animation
+    - simulation
+
+reinforcement_learning:
+  learning_rate: 0.001
+  gamma: 0.99
+  exploration_rate: 0.1
+  hidden_size: 128
+  reward_weights:
+    knowledge_gain: 0.5
+    engagement: 0.2
+    efficiency: 0.2
+    completion: 0.1
+
+learning_styles:
+  visual:
+    preferred_types: ["video", "animation", "infographic"]
+    content_duration: 600
+  auditory:
+    preferred_types: ["audio", "podcast", "lecture"]
+    content_duration: 450
+  kinesthetic:
+    preferred_types: ["interactive", "simulation", "game"]
+    content_duration: 300
+  reading_writing:
+    preferred_types: ["text", "article", "ebook"]
+    content_duration: 480
+
+assessment:
+  adaptive_difficulty: true
+  question_types:
+    - multiple_choice
+    - true_false
+    - fill_blank
+    - interactive
+    - diagram_based
+  difficulty_scaling: 0.1
+  mastery_threshold: 0.8
+
+progress_tracking:
+  retention_period: 90
+  velocity_window: 30
+  engagement_window: 7
+  knowledge_growth_metric: "composite"
