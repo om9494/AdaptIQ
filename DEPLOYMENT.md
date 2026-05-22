@@ -49,11 +49,11 @@ https://your-project.vercel.app,http://localhost:5173,http://127.0.0.1:5173
 
 - create a PostgreSQL database
 - install backend dependencies
-- run database migrations
+- run database migrations during service startup
+- run [`backend/seed_fresh_database.py`](./backend/seed_fresh_database.py) during service startup
 - start the Flask API with Gunicorn
-- run [`backend/seed_fresh_database.py`](./backend/seed_fresh_database.py) once on the first deploy
 
-That initial seed will populate the hosted database with the demo users, educator courses, course lessons, and seeded catalog data without re-seeding a non-empty database.
+That seed flow will populate the hosted database with the demo users, educator courses, course lessons, and seeded catalog data without re-seeding a non-empty database.
 
 ### Backend verification
 
