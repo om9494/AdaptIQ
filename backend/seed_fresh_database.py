@@ -1,6 +1,11 @@
-from app import create_app
-from models.db_models import Course, User
-from seed import seed
+try:
+    from .app import create_app
+    from .models.db_models import Course, User
+    from .seed import seed
+except ImportError:
+    from app import create_app
+    from models.db_models import Course, User
+    from seed import seed
 
 
 def seed_fresh_database():

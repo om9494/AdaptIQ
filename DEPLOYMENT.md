@@ -49,7 +49,6 @@ https://your-project.vercel.app,http://localhost:5173,http://127.0.0.1:5173
 
 - create a PostgreSQL database
 - install backend dependencies
-- run database migrations during service startup
 - run [`backend/seed_fresh_database.py`](./backend/seed_fresh_database.py) during service startup
 - start the Flask API with Gunicorn
 

@@ -10,18 +10,32 @@ os.environ.setdefault('UPLOAD_FOLDER', './uploads')
 os.environ.setdefault('MAX_CONTENT_LENGTH', '104857600')
 os.environ.setdefault('CORS_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173')
 
-from app import create_app, db
-from course_catalog import ALL_COURSE_BLUEPRINTS, expand_course_contents
-from models.db_models import (
-    Assessment,
-    Content,
-    Course,
-    Enrollment,
-    KnowledgeState,
-    LearningSession,
-    StudentProfile,
-    User,
-)
+try:
+    from .app import create_app, db
+    from .course_catalog import ALL_COURSE_BLUEPRINTS, expand_course_contents
+    from .models.db_models import (
+        Assessment,
+        Content,
+        Course,
+        Enrollment,
+        KnowledgeState,
+        LearningSession,
+        StudentProfile,
+        User,
+    )
+except ImportError:
+    from app import create_app, db
+    from course_catalog import ALL_COURSE_BLUEPRINTS, expand_course_contents
+    from models.db_models import (
+        Assessment,
+        Content,
+        Course,
+        Enrollment,
+        KnowledgeState,
+        LearningSession,
+        StudentProfile,
+        User,
+    )
 from werkzeug.security import generate_password_hash
 
 

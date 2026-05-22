@@ -1,14 +1,15 @@
 import os
 import sys
+
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 from flask import Flask
 from flask_cors import CORS
 from dotenv import load_dotenv
 from config import DevelopmentConfig, ProductionConfig
 from extensions import db, migrate, jwt
-
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
 
 
 def create_app():

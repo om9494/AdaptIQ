@@ -11,7 +11,7 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: flask --app app:create_app db upgrade && python seed_fresh_database.py && gunicorn wsgi:app
+    startCommand: python seed_fresh_database.py && gunicorn wsgi:app
     envVars:
       - key: FLASK_ENV
         value: production
