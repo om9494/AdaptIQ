@@ -3,10 +3,16 @@ from flask import Blueprint, request
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from extensions import db
-from models.db_models import User, StudentProfile, Notification
-from utils.helpers import success_response, error_response, parse_uuid
-from utils.badges import award_badges
+try:
+    from ..extensions import db
+    from ..models.db_models import User, StudentProfile, Notification
+    from ..utils.helpers import success_response, error_response, parse_uuid
+    from ..utils.badges import award_badges
+except ImportError:
+    from extensions import db
+    from models.db_models import User, StudentProfile, Notification
+    from utils.helpers import success_response, error_response, parse_uuid
+    from utils.badges import award_badges
 
 # scrypt is unsupported on Windows Python 3.13 — force pbkdf2:sha256
 _HASH_METHOD = 'pbkdf2:sha256'

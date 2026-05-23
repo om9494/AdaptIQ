@@ -2,7 +2,11 @@ import uuid
 from datetime import datetime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy import Enum
-from extensions import db
+
+try:
+    from ..extensions import db
+except ImportError:
+    from extensions import db
 
 
 UserRole = Enum('student', 'educator', 'admin', name='user_role')

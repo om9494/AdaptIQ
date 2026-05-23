@@ -2,10 +2,16 @@ import sys
 import importlib
 from flask import Blueprint, request, current_app
 
-from extensions import db
-from models.db_models import Content, KnowledgeState, StudentProfile, LearningSession, Course
-from utils.decorators import role_required
-from utils.helpers import success_response, error_response, parse_uuid
+try:
+    from ..extensions import db
+    from ..models.db_models import Content, KnowledgeState, StudentProfile, LearningSession, Course
+    from ..utils.decorators import role_required
+    from ..utils.helpers import success_response, error_response, parse_uuid
+except ImportError:
+    from extensions import db
+    from models.db_models import Content, KnowledgeState, StudentProfile, LearningSession, Course
+    from utils.decorators import role_required
+    from utils.helpers import success_response, error_response, parse_uuid
 
 
 api_bp = Blueprint('api', __name__)

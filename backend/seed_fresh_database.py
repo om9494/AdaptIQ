@@ -1,9 +1,9 @@
 try:
-    from .app import create_app
+    from .app import create_app, db
     from .models.db_models import Course, User
     from .seed import seed
 except ImportError:
-    from app import create_app
+    from app import create_app, db
     from models.db_models import Course, User
     from seed import seed
 
@@ -11,6 +11,7 @@ except ImportError:
 def seed_fresh_database():
     app = create_app()
     with app.app_context():
+        db.create_all()
         if User.query.first() or Course.query.first():
             print('Seed skipped because the database already contains data.')
             return

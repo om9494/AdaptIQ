@@ -8,8 +8,12 @@ if BASE_DIR not in sys.path:
 from flask import Flask
 from flask_cors import CORS
 from dotenv import load_dotenv
-from config import DevelopmentConfig, ProductionConfig
-from extensions import db, migrate, jwt
+try:
+    from .config import DevelopmentConfig, ProductionConfig
+    from .extensions import db, migrate, jwt
+except ImportError:
+    from config import DevelopmentConfig, ProductionConfig
+    from extensions import db, migrate, jwt
 
 
 def create_app():
@@ -27,7 +31,11 @@ def create_app():
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
     db.init_app(app)
-    import models.db_models  # ensure models are registered for migrations
+    try:
+        from . import models as _models_package  # noqa: F401
+        from .models import db_models as _db_models  # noqa: F401
+    except ImportError:
+        import models.db_models  # ensure models are registered for migrations
     migrate.init_app(app, db)
     jwt.init_app(app)
 
@@ -43,11 +51,18 @@ def create_app():
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     )
 
-    from blueprints.auth import auth_bp
-    from blueprints.student import student_bp
-    from blueprints.educator import educator_bp
-    from blueprints.admin import admin_bp
-    from blueprints.api import api_bp
+    try:
+        from .blueprints.auth import auth_bp
+        from .blueprints.student import student_bp
+        from .blueprints.educator import educator_bp
+        from .blueprints.admin import admin_bp
+        from .blueprints.api import api_bp
+    except ImportError:
+        from blueprints.auth import auth_bp
+        from blueprints.student import student_bp
+        from blueprints.educator import educator_bp
+        from blueprints.admin import admin_bp
+        from blueprints.api import api_bp
 
     app.register_blueprint(auth_bp, url_prefix='/auth')
     app.register_blueprint(student_bp, url_prefix='/student')
@@ -55,7 +70,10 @@ def create_app():
     app.register_blueprint(admin_bp, url_prefix='/admin')
     app.register_blueprint(api_bp, url_prefix='/api')
 
-    from services.ml_service import MLService
+    try:
+        from .services.ml_service import MLService
+    except ImportError:
+        from services.ml_service import MLService
     app.extensions['ml_service'] = MLService(app.config['ML_PATH'])
 
     @app.get('/health')

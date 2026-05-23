@@ -2,10 +2,16 @@ from datetime import datetime, timedelta
 from flask import Blueprint, request
 from flask_jwt_extended import get_jwt_identity
 
-from extensions import db
-from models.db_models import User, Course, Content, Enrollment, LearningSession, KnowledgeState, Assessment
-from utils.decorators import role_required
-from utils.helpers import success_response, error_response, parse_uuid
+try:
+    from ..extensions import db
+    from ..models.db_models import User, Course, Content, Enrollment, LearningSession, KnowledgeState, Assessment
+    from ..utils.decorators import role_required
+    from ..utils.helpers import success_response, error_response, parse_uuid
+except ImportError:
+    from extensions import db
+    from models.db_models import User, Course, Content, Enrollment, LearningSession, KnowledgeState, Assessment
+    from utils.decorators import role_required
+    from utils.helpers import success_response, error_response, parse_uuid
 
 
 admin_bp = Blueprint('admin', __name__)

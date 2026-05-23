@@ -1,6 +1,10 @@
 from functools import wraps
 from flask_jwt_extended import jwt_required, get_jwt
-from utils.helpers import error_response
+
+try:
+    from .helpers import error_response
+except ImportError:
+    from utils.helpers import error_response
 
 
 def role_required(*roles):

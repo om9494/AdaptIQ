@@ -2,13 +2,22 @@ from datetime import datetime, timedelta
 from flask import Blueprint, request, current_app, send_file, url_for
 from flask_jwt_extended import get_jwt_identity
 
-from course_catalog import get_course_runtime
-from extensions import db
-from models.db_models import Course, Content, Enrollment, LearningSession, Assessment, KnowledgeState, StudentProfile, Notification
-from utils.decorators import role_required
-from utils.helpers import success_response, error_response, parse_uuid, youtube_embed_url
-from utils.badges import award_badges
-from services.openai_service import generate_progress_summary, generate_quiz_with_llm
+try:
+    from ..course_catalog import get_course_runtime
+    from ..extensions import db
+    from ..models.db_models import Course, Content, Enrollment, LearningSession, Assessment, KnowledgeState, StudentProfile, Notification
+    from ..utils.decorators import role_required
+    from ..utils.helpers import success_response, error_response, parse_uuid, youtube_embed_url
+    from ..utils.badges import award_badges
+    from ..services.openai_service import generate_progress_summary, generate_quiz_with_llm
+except ImportError:
+    from course_catalog import get_course_runtime
+    from extensions import db
+    from models.db_models import Course, Content, Enrollment, LearningSession, Assessment, KnowledgeState, StudentProfile, Notification
+    from utils.decorators import role_required
+    from utils.helpers import success_response, error_response, parse_uuid, youtube_embed_url
+    from utils.badges import award_badges
+    from services.openai_service import generate_progress_summary, generate_quiz_with_llm
 
 
 student_bp = Blueprint('student', __name__)

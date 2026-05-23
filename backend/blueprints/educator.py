@@ -3,11 +3,18 @@ from datetime import datetime, timedelta
 from flask import Blueprint, request, current_app
 from flask_jwt_extended import get_jwt_identity
 
-from extensions import db
-from models.db_models import Course, Content, Enrollment, LearningSession, Assessment, KnowledgeState, User
-from utils.decorators import role_required
-from utils.helpers import success_response, error_response, parse_uuid, youtube_embed_url, youtube_thumbnail_url
-from utils.file_handler import save_upload, validate_upload, extract_text_from_file
+try:
+    from ..extensions import db
+    from ..models.db_models import Course, Content, Enrollment, LearningSession, Assessment, KnowledgeState, User
+    from ..utils.decorators import role_required
+    from ..utils.helpers import success_response, error_response, parse_uuid, youtube_embed_url, youtube_thumbnail_url
+    from ..utils.file_handler import save_upload, validate_upload, extract_text_from_file
+except ImportError:
+    from extensions import db
+    from models.db_models import Course, Content, Enrollment, LearningSession, Assessment, KnowledgeState, User
+    from utils.decorators import role_required
+    from utils.helpers import success_response, error_response, parse_uuid, youtube_embed_url, youtube_thumbnail_url
+    from utils.file_handler import save_upload, validate_upload, extract_text_from_file
 
 
 educator_bp = Blueprint('educator', __name__)
