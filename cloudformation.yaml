@@ -1,0 +1,1278 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  AdaptIQ distributed AWS infrastructure with CloudFront, Route53, ALB, Auto Scaling EC2,
+  RDS PostgreSQL primary + read replica, ElastiCache Redis, S3 buckets, Cognito,
+  CodeCommit, CodeBuild, CodeDeploy, and CodePipeline.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Naming and environment
+        Parameters:
+          - ProjectName
+          - EnvironmentName
+          - CodeCommitRepositoryName
+          - CodeCommitBranchName
+      - Label:
+          default: Networking
+        Parameters:
+          - VpcCidr
+          - PublicSubnet1Cidr
+          - PublicSubnet2Cidr
+          - AppSubnet1Cidr
+          - AppSubnet2Cidr
+          - DataSubnet1Cidr
+          - DataSubnet2Cidr
+      - Label:
+          default: DNS and certificates
+        Parameters:
+          - DomainName
+          - HostedZoneId
+          - CloudFrontCertificateArn
+          - AlbCertificateArn
+          - ExistingCloudFrontWebAclArn
+      - Label:
+          default: Application secrets and runtime
+        Parameters:
+          - AppSecretKey
+          - JwtSecretKey
+          - GeminiApiKey
+          - CorsOrigins
+      - Label:
+          default: Compute
+        Parameters:
+          - LatestAmiId
+          - InstanceType
+          - KeyPairName
+          - AppMinSize
+          - AppDesiredCapacity
+          - AppMaxSize
+      - Label:
+          default: Data services
+        Parameters:
+          - DBName
+          - DBUsername
+          - DBPassword
+          - DBInstanceClass
+          - RedisNodeType
+      - Label:
+          default: Build and deployment
+        Parameters:
+          - CodeBuildImage
+    ParameterLabels:
+      CloudFrontCertificateArn:
+        default: CloudFront ACM certificate ARN (must exist in us-east-1)
+      AlbCertificateArn:
+        default: ALB ACM certificate ARN (must exist in deployment region)
+      ExistingCloudFrontWebAclArn:
+        default: Optional global WAF Web ACL ARN for CloudFront
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: adaptiq
+    AllowedPattern: '^[a-zA-Z0-9-]+$'
+  EnvironmentName:
+    Type: String
+    Default: prod
+    AllowedPattern: '^[a-zA-Z0-9-]+$'
+  CodeCommitRepositoryName:
+    Type: String
+    Default: adaptiq
+  CodeCommitBranchName:
+    Type: String
+    Default: main
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+  PublicSubnet1Cidr:
+    Type: String
+    Default: 10.20.0.0/24
+  PublicSubnet2Cidr:
+    Type: String
+    Default: 10.20.1.0/24
+  AppSubnet1Cidr:
+    Type: String
+    Default: 10.20.10.0/24
+  AppSubnet2Cidr:
+    Type: String
+    Default: 10.20.11.0/24
+  DataSubnet1Cidr:
+    Type: String
+    Default: 10.20.20.0/24
+  DataSubnet2Cidr:
+    Type: String
+    Default: 10.20.21.0/24
+  DomainName:
+    Type: String
+    Default: ''
+    Description: Optional public application domain routed to CloudFront.
+  HostedZoneId:
+    Type: String
+    Default: ''
+    Description: Optional Route53 hosted zone ID for the public domain.
+  CloudFrontCertificateArn:
+    Type: String
+    Description: Existing ACM certificate ARN in us-east-1 for the CloudFront distribution.
+  AlbCertificateArn:
+    Type: String
+    Description: Existing ACM certificate ARN in the stack region for the ALB listener.
+  ExistingCloudFrontWebAclArn:
+    Type: String
+    Default: ''
+    Description: Optional pre-created WAFv2 WebACL ARN for CloudFront.
+  AppSecretKey:
+    Type: String
+    NoEcho: true
+    Description: Flask SECRET_KEY value.
+  JwtSecretKey:
+    Type: String
+    NoEcho: true
+    Description: Flask JWT secret value.
+  GeminiApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Gemini API key used by the backend service.
+  CorsOrigins:
+    Type: String
+    Default: http://localhost:5173,http://127.0.0.1:5173
+    Description: Comma-separated allowed frontend origins.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues:
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - m6i.large
+      - m6i.xlarge
+  KeyPairName:
+    Type: String
+    Default: ''
+    Description: Optional EC2 key pair for emergency SSH access.
+  AppMinSize:
+    Type: Number
+    Default: 1
+    MinValue: 1
+  AppDesiredCapacity:
+    Type: Number
+    Default: 2
+    MinValue: 1
+  AppMaxSize:
+    Type: Number
+    Default: 4
+    MinValue: 1
+  DBName:
+    Type: String
+    Default: adaptiq_db
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+  DBUsername:
+    Type: String
+    Default: adaptiq_admin
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9_]*$'
+  DBPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+  DBInstanceClass:
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues:
+      - db.t4g.micro
+      - db.t4g.small
+      - db.t3.micro
+      - db.t3.small
+  RedisNodeType:
+    Type: String
+    Default: cache.t4g.micro
+    AllowedValues:
+      - cache.t4g.micro
+      - cache.t4g.small
+      - cache.t3.micro
+      - cache.t3.small
+  CodeBuildImage:
+    Type: String
+    Default: aws/codebuild/standard:7.0
+
+Conditions:
+  HasDomainConfig: !And
+    - !Not [!Equals [!Ref DomainName, '']]
+    - !Not [!Equals [!Ref HostedZoneId, '']]
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, '']]
+  HasCloudFrontWebAcl: !Not [!Equals [!Ref ExistingCloudFrontWebAclArn, '']]
+
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-igw
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet1Cidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-public-a
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref PublicSubnet2Cidr
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-public-b
+
+  AppSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref AppSubnet1Cidr
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-app-a
+
+  AppSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref AppSubnet2Cidr
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-app-b
+
+  DataSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref DataSubnet1Cidr
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-data-a
+
+  DataSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select [1, !GetAZs '']
+      CidrBlock: !Ref DataSubnet2Cidr
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-data-b
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-public-rt
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-nat-eip
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      ConnectivityType: public
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-nat
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-private-rt
+
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  AppSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref AppSubnet1
+
+  AppSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref AppSubnet2
+
+  DataSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref DataSubnet1
+
+  DataSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref DataSubnet2
+
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Public ALB access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-alb-sg
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Flask API instances
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          SourceSecurityGroupId: !Ref AlbSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-app-sg
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL access from app tier
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-db-sg
+
+  RedisSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Redis access from app tier
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 6379
+          ToPort: 6379
+          SourceSecurityGroupId: !Ref AppSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-redis-sg
+
+  StaticAssetsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-static
+
+  ContentBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: IntelligentTiering
+            Status: Enabled
+            Transitions:
+              - StorageClass: INTELLIGENT_TIERING
+                TransitionInDays: 30
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-content
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: GlacierArchive
+            Status: Enabled
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: 60
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-backup
+
+  PipelineArtifactsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-pipeline-artifacts
+
+  CloudFrontOai:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub ${ProjectName}-${EnvironmentName} static assets OAI
+
+  StaticAssetsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref StaticAssetsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              CanonicalUser: !GetAtt CloudFrontOai.S3CanonicalUserId
+            Action: s3:GetObject
+            Resource: !Sub ${StaticAssetsBucket.Arn}/*
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub ${ProjectName}-${EnvironmentName}-users
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+          RequireUppercase: true
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+        - Name: role
+          AttributeDataType: String
+          Mutable: true
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub ${ProjectName}-${EnvironmentName}-web
+      UserPoolId: !Ref CognitoUserPool
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+      GenerateSecret: false
+      PreventUserExistenceErrors: ENABLED
+      SupportedIdentityProviders:
+        - COGNITO
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: AdaptIQ RDS private subnets
+      SubnetIds:
+        - !Ref DataSubnet1
+        - !Ref DataSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-db-subnets
+
+  PrimaryDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub ${ProjectName}-${EnvironmentName}-primary
+      AllocatedStorage: 20
+      StorageType: gp3
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: postgres
+      EngineVersion: '16.4'
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBName: !Ref DBName
+      MultiAZ: false
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      BackupRetentionPeriod: 7
+      EnablePerformanceInsights: true
+      DeletionProtection: false
+      VPCSecurityGroups:
+        - !GetAtt DatabaseSecurityGroup.GroupId
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-postgres-primary
+
+  DatabaseReadReplica:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub ${ProjectName}-${EnvironmentName}-replica
+      DBInstanceClass: !Ref DBInstanceClass
+      SourceDBInstanceIdentifier: !Ref PrimaryDatabase
+      PubliclyAccessible: false
+      StorageEncrypted: true
+      EnablePerformanceInsights: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-postgres-replica
+
+  RedisSubnetGroup:
+    Type: AWS::ElastiCache::SubnetGroup
+    Properties:
+      Description: Redis private subnet group
+      SubnetIds:
+        - !Ref DataSubnet1
+        - !Ref DataSubnet2
+
+  RedisReplicationGroup:
+    Type: AWS::ElastiCache::ReplicationGroup
+    Properties:
+      ReplicationGroupDescription: AdaptIQ Redis cache
+      Engine: redis
+      EngineVersion: '7.1'
+      CacheNodeType: !Ref RedisNodeType
+      NumCacheClusters: 2
+      AutomaticFailoverEnabled: true
+      MultiAZEnabled: true
+      AtRestEncryptionEnabled: true
+      TransitEncryptionEnabled: true
+      CacheSubnetGroupName: !Ref RedisSubnetGroup
+      SecurityGroupIds:
+        - !GetAtt RedisSecurityGroup.GroupId
+      PreferredCacheClusterAZs:
+        - !Select [0, !GetAZs '']
+        - !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-redis
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub ${ProjectName}-${EnvironmentName}-alb
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      Type: application
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-alb
+
+  ApiTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub ${ProjectName}-${EnvironmentName}-tg
+      Port: 5000
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckPath: /health
+      HealthCheckProtocol: HTTP
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200
+      UnhealthyThresholdCount: 3
+      VpcId: !Ref Vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-tg
+
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Port: '443'
+            Protocol: HTTPS
+            StatusCode: HTTP_301
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  HttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref AlbCertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ApiTargetGroup
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 443
+      Protocol: HTTPS
+
+  AppInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${EnvironmentName}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: !Sub ${ProjectName}-${EnvironmentName}-ec2-runtime
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt ContentBucket.Arn
+                  - !Sub ${ContentBucket.Arn}/*
+                  - !GetAtt BackupBucket.Arn
+                  - !Sub ${BackupBucket.Arn}/*
+                  - !GetAtt StaticAssetsBucket.Arn
+                  - !Sub ${StaticAssetsBucket.Arn}/*
+
+  AppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref AppInstanceRole
+
+  AppLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${ProjectName}-${EnvironmentName}-lt
+      LaunchTemplateData:
+        IamInstanceProfile:
+          Arn: !GetAtt AppInstanceProfile.Arn
+        ImageId: !Ref LatestAmiId
+        InstanceType: !Ref InstanceType
+        KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref AWS::NoValue]
+        SecurityGroupIds:
+          - !Ref AppSecurityGroup
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash -xe
+            dnf update -y
+            dnf install -y ruby wget python3 python3-pip git tar gzip
+            cd /tmp
+            wget https://aws-codedeploy-${AWS::Region}.s3.${AWS::Region}.amazonaws.com/latest/install
+            chmod +x ./install
+            ./install auto
+            mkdir -p /opt/adaptiq/shared /opt/adaptiq/current /opt/adaptiq/data/uploads
+            cat > /opt/adaptiq/shared/runtime.env <<'EOF'
+            FLASK_ENV=production
+            SECRET_KEY=${AppSecretKey}
+            JWT_SECRET_KEY=${JwtSecretKey}
+            DATABASE_URL=postgresql://${DBUsername}:${DBPassword}@${PrimaryDatabase.Endpoint.Address}:5432/${DBName}
+            UPLOAD_FOLDER=/opt/adaptiq/data/uploads
+            MAX_CONTENT_LENGTH=104857600
+            CORS_ORIGINS=${CorsOrigins}
+            ML_PATH=/opt/adaptiq/current/backend/eduadapt-ai
+            GEMINI_API_KEY=${GeminiApiKey}
+            REDIS_HOST=${RedisReplicationGroup.PrimaryEndPoint.Address}
+            REDIS_PORT=${RedisReplicationGroup.PrimaryEndPoint.Port}
+            CONTENT_BUCKET=${ContentBucket}
+            STATIC_BUCKET=${StaticAssetsBucket}
+            BACKUP_BUCKET=${BackupBucket}
+            COGNITO_USER_POOL_ID=${CognitoUserPool}
+            COGNITO_CLIENT_ID=${CognitoUserPoolClient}
+            AWS_REGION=${AWS::Region}
+            EOF
+            chown -R ec2-user:ec2-user /opt/adaptiq
+            systemctl enable codedeploy-agent
+            systemctl start codedeploy-agent
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub ${ProjectName}-${EnvironmentName}-app
+              - Key: Project
+                Value: !Ref ProjectName
+
+  AppAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${ProjectName}-${EnvironmentName}-asg
+      VPCZoneIdentifier:
+        - !Ref AppSubnet1
+        - !Ref AppSubnet2
+      MinSize: !Ref AppMinSize
+      DesiredCapacity: !Ref AppDesiredCapacity
+      MaxSize: !Ref AppMaxSize
+      LaunchTemplate:
+        LaunchTemplateId: !Ref AppLaunchTemplate
+        Version: !GetAtt AppLaunchTemplate.LatestVersionNumber
+      TargetGroupARNs:
+        - !Ref ApiTargetGroup
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 600
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-${EnvironmentName}-asg
+          PropagateAtLaunch: true
+        - Key: Project
+          Value: !Ref ProjectName
+          PropagateAtLaunch: true
+
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${EnvironmentName}-codedeploy-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: !Sub ${ProjectName}-${EnvironmentName}-app
+      ComputePlatform: Server
+
+  CodeDeployDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      AutoScalingGroups:
+        - !Ref AppAutoScalingGroup
+      DeploymentConfigName: CodeDeployDefault.AllAtOnce
+      DeploymentGroupName: !Sub ${ProjectName}-${EnvironmentName}-dg
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      DeploymentStyle:
+        DeploymentOption: WITHOUT_TRAFFIC_CONTROL
+        DeploymentType: IN_PLACE
+      Ec2TagFilters:
+        - Key: Project
+          Type: KEY_AND_VALUE
+          Value: !Ref ProjectName
+
+  CodeCommitRepository:
+    Type: AWS::CodeCommit::Repository
+    Properties:
+      RepositoryName: !Ref CodeCommitRepositoryName
+      RepositoryDescription: !Sub Source repository for ${ProjectName} ${EnvironmentName}
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${EnvironmentName}-codebuild-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${ProjectName}-${EnvironmentName}-codebuild
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt StaticAssetsBucket.Arn
+                  - !Sub ${StaticAssetsBucket.Arn}/*
+                  - !GetAtt PipelineArtifactsBucket.Arn
+                  - !Sub ${PipelineArtifactsBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - cloudfront:CreateInvalidation
+                Resource: '*'
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${ProjectName}-${EnvironmentName}-build
+      Description: Build AdaptIQ frontend and deployment bundle
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: !Ref CodeBuildImage
+        Type: LINUX_CONTAINER
+        PrivilegedMode: false
+        EnvironmentVariables:
+          - Name: STATIC_ASSETS_BUCKET
+            Value: !Ref StaticAssetsBucket
+          - Name: CLOUDFRONT_DISTRIBUTION_ID
+            Value: !Ref CloudFrontDistribution
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-${EnvironmentName}-pipeline-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub ${ProjectName}-${EnvironmentName}-pipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketVersioning
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource:
+                  - !GetAtt PipelineArtifactsBucket.Arn
+                  - !Sub ${PipelineArtifactsBucket.Arn}/*
+              - Effect: Allow
+                Action:
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetRepository
+                  - codecommit:UploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:CancelUploadArchive
+                Resource: !GetAtt CodeCommitRepository.Arn
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: !GetAtt BuildProject.Arn
+              - Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetApplication
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:RegisterApplicationRevision
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt CodeBuildServiceRole.Arn
+                  - !GetAtt CodeDeployServiceRole.Arn
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub ${ProjectName}-${EnvironmentName}-pipeline
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactsBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceFromCodeCommit
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeCommit
+                Version: '1'
+              Configuration:
+                RepositoryName: !GetAtt CodeCommitRepository.Name
+                BranchName: !Ref CodeCommitBranchName
+                PollForSourceChanges: true
+              OutputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+        - Name: Build
+          Actions:
+            - Name: BuildAndPublishFrontend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref BuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: DeployBackendToAsg
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CodeDeploy
+                Version: '1'
+              Configuration:
+                ApplicationName: !Ref CodeDeployApplication
+                DeploymentGroupName: !Ref CodeDeployDeploymentGroup
+              InputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+  StaticCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub ${ProjectName}-${EnvironmentName}-static-cache
+        DefaultTTL: 86400
+        MaxTTL: 31536000
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: none
+          EnableAcceptEncodingBrotli: true
+          EnableAcceptEncodingGzip: true
+          HeadersConfig:
+            HeaderBehavior: none
+          QueryStringsConfig:
+            QueryStringBehavior: none
+
+  ApiCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub ${ProjectName}-${EnvironmentName}-api-cache
+        DefaultTTL: 0
+        MaxTTL: 1
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: all
+          EnableAcceptEncodingBrotli: true
+          EnableAcceptEncodingGzip: true
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers:
+              - Authorization
+              - Content-Type
+              - Origin
+              - Accept
+          QueryStringsConfig:
+            QueryStringBehavior: all
+
+  ApiOriginRequestPolicy:
+    Type: AWS::CloudFront::OriginRequestPolicy
+    Properties:
+      OriginRequestPolicyConfig:
+        Name: !Sub ${ProjectName}-${EnvironmentName}-api-origin
+        CookiesConfig:
+          CookieBehavior: all
+        HeadersConfig:
+          HeaderBehavior: allViewer
+        QueryStringsConfig:
+          QueryStringBehavior: all
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Aliases: !If
+          - HasDomainConfig
+          - - !Ref DomainName
+          - !Ref AWS::NoValue
+        DefaultRootObject: index.html
+        HttpVersion: http2
+        IPV6Enabled: true
+        PriceClass: PriceClass_200
+        WebACLId: !If [HasCloudFrontWebAcl, !Ref ExistingCloudFrontWebAclArn, !Ref AWS::NoValue]
+        Origins:
+          - Id: StaticAssetsOrigin
+            DomainName: !GetAtt StaticAssetsBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub origin-access-identity/cloudfront/${CloudFrontOai}
+          - Id: ApiAlbOrigin
+            DomainName: !GetAtt ApplicationLoadBalancer.DNSName
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+        DefaultCacheBehavior:
+          TargetOriginId: StaticAssetsOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: !Ref StaticCachePolicy
+          Compress: true
+        OrderedCacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: ApiAlbOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD, OPTIONS]
+            CachePolicyId: !Ref ApiCachePolicy
+            OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            Compress: true
+          - PathPattern: /auth/*
+            TargetOriginId: ApiAlbOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD, OPTIONS]
+            CachePolicyId: !Ref ApiCachePolicy
+            OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            Compress: true
+          - PathPattern: /student/*
+            TargetOriginId: ApiAlbOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD, OPTIONS]
+            CachePolicyId: !Ref ApiCachePolicy
+            OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            Compress: true
+          - PathPattern: /educator/*
+            TargetOriginId: ApiAlbOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD, OPTIONS]
+            CachePolicyId: !Ref ApiCachePolicy
+            OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            Compress: true
+          - PathPattern: /admin/*
+            TargetOriginId: ApiAlbOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS, PUT, PATCH, POST, DELETE]
+            CachedMethods: [GET, HEAD, OPTIONS]
+            CachePolicyId: !Ref ApiCachePolicy
+            OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            Compress: true
+          - PathPattern: /health
+            TargetOriginId: ApiAlbOrigin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD, OPTIONS]
+            CachedMethods: [GET, HEAD, OPTIONS]
+            CachePolicyId: !Ref ApiCachePolicy
+            OriginRequestPolicyId: !Ref ApiOriginRequestPolicy
+            Compress: true
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CloudFrontCertificateArn
+          MinimumProtocolVersion: TLSv1.2_2021
+          SslSupportMethod: sni-only
+
+  PublicDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Condition: HasDomainConfig
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+
+Outputs:
+  CodeCommitCloneUrlHttp:
+    Description: Push this repository into CodeCommit so the pipeline can start.
+    Value: !GetAtt CodeCommitRepository.CloneUrlHttp
+
+  CloudFrontUrl:
+    Description: Public frontend entrypoint.
+    Value: !Sub https://${CloudFrontDistribution.DomainName}
+
+  ApiAlbDnsName:
+    Description: Public ALB DNS name for direct API testing.
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+
+  StaticAssetsBucketName:
+    Value: !Ref StaticAssetsBucket
+
+  ContentBucketName:
+    Value: !Ref ContentBucket
+
+  BackupBucketName:
+    Value: !Ref BackupBucket
+
+  PipelineName:
+    Value: !Ref Pipeline
+
+  CodeDeployApplicationName:
+    Value: !Ref CodeDeployApplication
+
+  CodeDeployDeploymentGroupName:
+    Value: !Ref CodeDeployDeploymentGroup
+
+  CognitoUserPoolId:
+    Value: !Ref CognitoUserPool
+
+  CognitoUserPoolClientId:
+    Value: !Ref CognitoUserPoolClient
+
+  PrimaryDatabaseEndpoint:
+    Value: !GetAtt PrimaryDatabase.Endpoint.Address
+
+  RedisPrimaryEndpoint:
+    Value: !GetAtt RedisReplicationGroup.PrimaryEndPoint.Address

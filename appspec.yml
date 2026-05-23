@@ -1,0 +1,26 @@
+version: 0.0
+os: linux
+
+files:
+  - source: backend
+    destination: /opt/adaptiq/current
+  - source: scripts
+    destination: /opt/adaptiq/current
+
+hooks:
+  BeforeInstall:
+    - location: scripts/codedeploy_before_install.sh
+      timeout: 300
+      runas: root
+  AfterInstall:
+    - location: scripts/codedeploy_after_install.sh
+      timeout: 1800
+      runas: root
+  ApplicationStart:
+    - location: scripts/codedeploy_application_start.sh
+      timeout: 300
+      runas: root
+  ValidateService:
+    - location: scripts/codedeploy_validate_service.sh
+      timeout: 300
+      runas: root

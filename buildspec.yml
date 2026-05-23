@@ -1,0 +1,33 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 20
+      python: 3.11
+    commands:
+      - echo "Installing frontend dependencies"
+      - cd frontend
+      - npm ci
+      - cd ..
+  build:
+    commands:
+      - echo "Building React SPA"
+      - cd frontend
+      - npm run build
+      - cd ..
+      - echo "Publishing static assets to S3"
+      - aws s3 sync frontend/dist s3://$STATIC_ASSETS_BUCKET --delete
+      - echo "Invalidating CloudFront cache"
+      - aws cloudfront create-invalidation --distribution-id $CLOUDFRONT_DISTRIBUTION_ID --paths "/*"
+      - echo "Preparing CodeDeploy bundle"
+      - mkdir -p artifact
+      - cp -R backend artifact/backend
+      - cp appspec.yml artifact/appspec.yml
+      - cp -R scripts artifact/scripts
+      - chmod +x artifact/scripts/*.sh
+
+artifacts:
+  base-directory: artifact
+  files:
+    - '**/*'
