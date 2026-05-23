@@ -1,6 +1,6 @@
 import os
 import sys
-
+# CODE IS PERFECTLY FINE, BUT THIS IS A HACK TO ALLOW RELATIVE IMPORTS TO WORK WHEN RUNNING app.py DIRECTLY
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
